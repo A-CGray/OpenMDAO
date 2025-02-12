@@ -133,13 +133,14 @@ class NonlinearBlockGS(NonlinearSolver):
         self._gs_iter()
         self._solver_info.pop()
 
+        theta = 1.0
         if use_aitken:
-            self._aitken_relax(outputs, residuals, outputs_n, delta_outputs_n)
+            theta = self._aitken_relax(outputs, residuals, outputs_n, delta_outputs_n)
 
         if not self.options['use_apply_nonlinear']:
             # Residual is the change in the outputs vector.
             with system._unscaled_context(outputs=[outputs], residuals=[residuals]):
-                residuals.set_val(outputs.asarray() - outputs_n)
+                residuals.set_val((outputs.asarray() - outputs_n) / theta)
 
     def _run_apply(self):
         """
@@ -181,12 +182,13 @@ class NonlinearBlockGS(NonlinearSolver):
                 if subsys._is_local:
                     subsys._solve_nonlinear()
 
+            theta = 1.0
             if use_aitken:
-                self._aitken_relax(outputs, residuals, outputs_n, delta_outputs_n)
+                theta = self._aitken_relax(outputs, residuals, outputs_n, delta_outputs_n)
 
             self._solver_info.pop()
             with system._unscaled_context(residuals=[residuals], outputs=[outputs]):
-                residuals.set_val(outputs.asarray() - outputs_n)
+                residuals.set_val((outputs.asarray() - outputs_n) / theta)
 
     def _aitken_relax(self, outputs, residuals, outputs_n, delta_outputs_n):
         """
@@ -258,3 +260,5 @@ class NonlinearBlockGS(NonlinearSolver):
 
         # save update to use in next iteration
         delta_outputs_n_1[:] = delta_outputs_n
+
+        return theta_n
