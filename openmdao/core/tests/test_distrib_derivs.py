@@ -10,11 +10,10 @@ from openmdao.test_suite.components.distributed_components import DistribCompDer
 from openmdao.test_suite.components.paraboloid_distributed import DistParab, DistParabFeature, \
     DistParabDeprecated
 from openmdao.utils.mpi import MPI
-from openmdao.utils.om_warnings import OMDeprecationWarning
 from openmdao.utils.name_maps import rel_name2abs_name
 from openmdao.utils.array_utils import evenly_distrib_idxs
 from openmdao.utils.assert_utils import assert_near_equal, assert_check_partials, \
-    assert_check_totals, assert_warning
+    assert_check_totals
 from openmdao.utils.testing_utils import use_tempdirs
 
 try:
@@ -32,19 +31,11 @@ try:
 except ImportError:
     PETScVector = None
 
-if MPI:
-    rank = MPI.COMM_WORLD.rank
-else:
-    rank = 0
-
 
 class DistribCoordComp(om.ExplicitComponent):
 
     def setup(self):
-        comm = self.comm
-        rank = comm.rank
-
-        if rank == 0:
+        if self.comm.rank == 0:
             self.add_input('invec', np.zeros((5, 3)), distributed=True)
             self.add_output('outvec', np.zeros((5, 3)), distributed=True)
         else:
@@ -103,7 +94,10 @@ class MixedDistrib2(om.ExplicitComponent):  # for double diamond case
 
         f_Id = Id**2 - 2.0*Id + 4.0
         f_Is = Is ** 0.5
-        g_Is = Is**2 + 3.0*Is - 5.0
+        # got rid of -5 here because it resulted in negative sqrt later on.
+        # this wasn't detected earlier due to a bug in assert_check_totals that
+        # didn't handle nans correctly.
+        g_Is = Is**2 + 3.0*Is
         g_Id = Id ** 0.5
 
         # Distributed output
@@ -285,7 +279,7 @@ def _test_func_name(func, num, param):
     for p in param.args:
         try:
             arg = p.__name__
-        except:
+        except Exception:
             arg = str(p)
         args.append(arg)
     return func.__name__ + '_' + '_'.join(args)
@@ -623,17 +617,8 @@ class MPITests2(unittest.TestCase):
                           np.array([27.0, 24.96, 23.64, 23.04, 23.16, 24.0, 25.56]),
                           1e-6)
 
-        J = prob.check_totals(method='fd', out_stream=None)
-        assert_near_equal(J['f_xy', 'x']['abs error'].forward, 0.0, 1e-5)
-        assert_near_equal(J['f_xy', 'y']['abs error'].forward, 0.0, 1e-5)
-        assert_near_equal(J['f_sum', 'x']['abs error'].forward, 0.0, 1e-5)
-        assert_near_equal(J['f_sum', 'y']['abs error'].forward, 0.0, 1e-5)
-
-        J = prob.check_totals(method='cs', out_stream=None)
-        assert_near_equal(J['f_xy', 'x']['abs error'].forward, 0.0, 1e-14)
-        assert_near_equal(J['f_xy', 'y']['abs error'].forward, 0.0, 1e-14)
-        assert_near_equal(J['f_sum', 'x']['abs error'].forward, 0.0, 1e-14)
-        assert_near_equal(J['f_sum', 'y']['abs error'].forward, 0.0, 1e-14)
+        assert_check_totals(prob.check_totals(method='fd', out_stream=None))
+        assert_check_totals(prob.check_totals(method='cs', out_stream=None))
 
         # rev mode
 
@@ -649,17 +634,8 @@ class MPITests2(unittest.TestCase):
                           np.array([27.0, 24.96, 23.64, 23.04, 23.16, 24.0, 25.56]),
                           1e-6)
 
-        J = prob.check_totals(method='fd', show_only_incorrect=True)
-        assert_near_equal(J['f_xy', 'x']['abs error'].reverse, 0.0, 1e-5)
-        assert_near_equal(J['f_xy', 'y']['abs error'].reverse, 0.0, 1e-5)
-        assert_near_equal(J['f_sum', 'x']['abs error'].reverse, 0.0, 1e-5)
-        assert_near_equal(J['f_sum', 'y']['abs error'].reverse, 0.0, 1e-5)
-
-        J = prob.check_totals(method='cs', show_only_incorrect=True)
-        assert_near_equal(J['f_xy', 'x']['abs error'].reverse, 0.0, 1e-14)
-        assert_near_equal(J['f_xy', 'y']['abs error'].reverse, 0.0, 1e-14)
-        assert_near_equal(J['f_sum', 'x']['abs error'].reverse, 0.0, 1e-14)
-        assert_near_equal(J['f_sum', 'y']['abs error'].reverse, 0.0, 1e-14)
+        assert_check_totals(prob.check_totals(method='fd', out_stream=None))
+        assert_check_totals(prob.check_totals(method='cs', out_stream=None))
 
     def test_distrib_voi_sparse(self):
         size = 7
@@ -698,17 +674,8 @@ class MPITests2(unittest.TestCase):
                           np.array([27.0, 24.96, 23.64, 23.04, 23.16, 24.0, 25.56]),
                           1e-6)
 
-        J = prob.check_totals(method='fd', show_only_incorrect=True)
-        assert_near_equal(J['f_xy', 'x']['abs error'].forward, 0.0, 1e-5)
-        assert_near_equal(J['f_xy', 'y']['abs error'].forward, 0.0, 1e-5)
-        assert_near_equal(J['f_sum', 'x']['abs error'].forward, 0.0, 1e-5)
-        assert_near_equal(J['f_sum', 'y']['abs error'].forward, 0.0, 1e-5)
-
-        J = prob.check_totals(method='cs', show_only_incorrect=True)
-        assert_near_equal(J['f_xy', 'x']['abs error'].forward, 0.0, 1e-14)
-        assert_near_equal(J['f_xy', 'y']['abs error'].forward, 0.0, 1e-14)
-        assert_near_equal(J['f_sum', 'x']['abs error'].forward, 0.0, 1e-14)
-        assert_near_equal(J['f_sum', 'y']['abs error'].forward, 0.0, 1e-14)
+        assert_check_totals(prob.check_totals(method='fd', out_stream=None))
+        assert_check_totals(prob.check_totals(method='cs', out_stream=None))
 
         # rev mode
 
@@ -724,17 +691,8 @@ class MPITests2(unittest.TestCase):
                           np.array([27.0, 24.96, 23.64, 23.04, 23.16, 24.0, 25.56]),
                           1e-6)
 
-        J = prob.check_totals(method='fd', show_only_incorrect=True)
-        assert_near_equal(J['f_xy', 'x']['abs error'].reverse, 0.0, 1e-5)
-        assert_near_equal(J['f_xy', 'y']['abs error'].reverse, 0.0, 1e-5)
-        assert_near_equal(J['f_sum', 'x']['abs error'].reverse, 0.0, 1e-5)
-        assert_near_equal(J['f_sum', 'y']['abs error'].reverse, 0.0, 1e-5)
-
-        J = prob.check_totals(method='cs', show_only_incorrect=True)
-        assert_near_equal(J['f_xy', 'x']['abs error'].reverse, 0.0, 1e-14)
-        assert_near_equal(J['f_xy', 'y']['abs error'].reverse, 0.0, 1e-14)
-        assert_near_equal(J['f_sum', 'x']['abs error'].reverse, 0.0, 1e-14)
-        assert_near_equal(J['f_sum', 'y']['abs error'].reverse, 0.0, 1e-14)
+        assert_check_totals(prob.check_totals(method='fd', out_stream=None))
+        assert_check_totals(prob.check_totals(method='cs', out_stream=None))
 
     def test_distrib_voi_fd(self):
         size = 7
@@ -773,11 +731,7 @@ class MPITests2(unittest.TestCase):
                           np.array([27.0, 24.96, 23.64, 23.04, 23.16, 24.0, 25.56]),
                           1e-6)
 
-        J = prob.check_totals(out_stream=None, method='cs')
-        assert_near_equal(J['f_xy', 'x']['abs error'].forward, 0.0, 1e-5)
-        assert_near_equal(J['f_xy', 'y']['abs error'].forward, 0.0, 1e-5)
-        assert_near_equal(J['f_sum', 'x']['abs error'].forward, 0.0, 1e-5)
-        assert_near_equal(J['f_sum', 'y']['abs error'].forward, 0.0, 1e-5)
+        assert_check_totals(prob.check_totals(method='cs', out_stream=None))
 
         # rev mode
 
@@ -793,11 +747,7 @@ class MPITests2(unittest.TestCase):
                           np.array([27.0, 24.96, 23.64, 23.04, 23.16, 24.0, 25.56]),
                           1e-6)
 
-        J = prob.check_totals(method='cs', show_only_incorrect=True)
-        assert_near_equal(J['f_xy', 'x']['abs error'].reverse, 0.0, 1e-5)
-        assert_near_equal(J['f_xy', 'y']['abs error'].reverse, 0.0, 1e-5)
-        assert_near_equal(J['f_sum', 'x']['abs error'].reverse, 0.0, 1e-5)
-        assert_near_equal(J['f_sum', 'y']['abs error'].reverse, 0.0, 1e-5)
+        assert_check_totals(prob.check_totals(method='cs', out_stream=None))
 
     def _setup_distrib_voi_group_fd(self, mode, size=7):
         # Only supports groups where the inputs to the distributed component whose inputs are
@@ -870,13 +820,13 @@ class MPITests2(unittest.TestCase):
 
         assert_check_totals(prob.check_totals(method='fd', out_stream=None), rtol=1e-5)
 
-    def test_distrib_voi_group_fd2(self):
+    def test_distrib_voi_group_fd2_fwd(self):
         prob = _setup_ivc_subivc_dist_parab_sum()
         prob.setup(mode='fwd', force_alloc_complex=True)
         prob.run_model()
         assert_check_totals(prob.check_totals(method='fd', out_stream=None))
 
-    def test_distrib_voi_group_fd2(self):
+    def test_distrib_voi_group_fd2_rev(self):
         prob = _setup_ivc_subivc_dist_parab_sum()
         prob.setup(mode='rev', force_alloc_complex=True)
         prob.run_model()
@@ -1257,13 +1207,13 @@ class MPITests2(unittest.TestCase):
             assert_check_totals(prob.check_totals(method='cs', out_stream=None), rtol=1e-13)
 
     def run_mixed_distrib2_prob(self, mode, klass=MixedDistrib2):
-        size = 5
-        comm = MPI.COMM_WORLD
-        rank = comm.rank
-        sizes, offsets = evenly_distrib_idxs(comm.size, size)
-
         prob = om.Problem()
         model = prob.model
+
+        size = 5
+        comm = prob.comm
+        rank = comm.rank
+        sizes, offsets = evenly_distrib_idxs(comm.size, size)
 
         ivc = om.IndepVarComp()
         ivc.add_output('x_dist', np.zeros(sizes[rank]), distributed=True)
@@ -1326,16 +1276,16 @@ class MPITests2(unittest.TestCase):
         partials = prob.check_partials(show_only_incorrect=True, method='cs')
         assert_check_partials(partials)
 
-    def test_distrib_cascade_rev(self):
+    def build_cascade_problem(self, mode):
         # Tests the derivatives on a complicated model that is the distributed equivalent
         # of a double diamond.
-        size = 5
-        comm = MPI.COMM_WORLD
-        rank = comm.rank
-        sizes, offsets = evenly_distrib_idxs(comm.size, size)
-
         prob = om.Problem()
         model = prob.model
+
+        size = 5
+        comm = prob.comm
+        rank = comm.rank
+        sizes, offsets = evenly_distrib_idxs(comm.size, size)
 
         ivc = om.IndepVarComp()
         ivc.add_output('x_dist', np.zeros(sizes[rank]), distributed=True)
@@ -1361,14 +1311,7 @@ class MPITests2(unittest.TestCase):
         model.add_constraint('D4.out_dist', lower=0.0)
         model.add_constraint('D4.out_nd', lower=0.0)
 
-        msg = "'D4' <class MixedDistrib2>: It appears this component mixes " \
-              "distributed/non-distributed inputs and outputs, so it may break starting with " \
-              "OpenMDAO 3.25, where the convention used when passing data between " \
-              "distributed and non-distributed inputs and outputs within a matrix free component " \
-              "will change. See https://github.com/OpenMDAO/POEMs/blob/master/POEM_075.md for " \
-              "details."
-        with assert_warning(OMDeprecationWarning, msg):
-            prob.setup(force_alloc_complex=True, mode='rev')
+        prob.setup(force_alloc_complex=True, mode=mode)
 
         # Set initial values of distributed variable.
         x_dist_init = 3.0 + np.arange(size)[offsets[rank]:offsets[rank] + sizes[rank]]
@@ -1381,7 +1324,15 @@ class MPITests2(unittest.TestCase):
         prob.set_val('indep.x_nd', x_nd_init)
 
         prob.run_model()
+        return prob
 
+    def test_distrib_cascade_rev(self):
+        prob = self.build_cascade_problem(mode='rev')
+        totals = prob.check_totals(show_only_incorrect=True, method='cs')
+        assert_check_totals(totals, rtol=1e-12)
+
+    def test_distrib_cascade_fwd(self):
+        prob = self.build_cascade_problem(mode='fwd')
         totals = prob.check_totals(show_only_incorrect=True, method='cs')
         assert_check_totals(totals, rtol=1e-12)
 
@@ -2168,8 +2119,7 @@ class DeclarePartialsWithoutRowCol(unittest.TestCase):
         prob.run_model()
         assert_near_equal(prob['execcomp.z'], np.ones((size,))*-38.4450, 1e-9)
 
-        data = prob.check_totals(out_stream=None)
-        assert_near_equal(data[('execcomp.z', 'x')]['abs error'].forward, 0.0, 1e-6)
+        assert_check_totals(prob.check_totals(out_stream=None))
 
 
 class TestBugs(unittest.TestCase):
@@ -2191,7 +2141,7 @@ class TestBugs(unittest.TestCase):
                 outputs['func'] += np.sum(inputs['state'])
 
         prob = om.Problem()
-        dvs = prob.model.add_subsystem('dvs',DVS())
+        prob.model.add_subsystem('dvs', DVS())
         prob.model.add_subsystem('solver', SolverComp())
         prob.model.connect('dvs.state','solver.state')
         prob.model.add_design_var('dvs.state', indices=[0,2])
@@ -2199,8 +2149,7 @@ class TestBugs(unittest.TestCase):
 
         prob.setup()
         prob.run_model()
-        totals = prob.check_totals(wrt='dvs.state', show_only_incorrect=True)
-        assert_near_equal(totals['solver.func', 'dvs.state']['abs error'].reverse, 0.0, tolerance=1e-7)
+        assert_check_totals(prob.check_totals(wrt='dvs.state', show_only_incorrect=True))
 
 
 def f_out_dist(Id, Is):
@@ -2431,11 +2380,13 @@ class TestDistribBugs(unittest.TestCase):
     def get_problem(self, comp_class, mode='auto', stacked=False):
         size = 5
 
-        comm = MPI.COMM_WORLD
+        prob = om.Problem()
+
+        comm = prob.comm
         rank = comm.rank
         sizes, offsets = evenly_distrib_idxs(comm.size, size)
 
-        model = om.Group()
+        model = prob.model
 
         ivc = om.IndepVarComp()
         ivc.add_output('x_dist', np.zeros(sizes[rank]), distributed=True)
@@ -2452,7 +2403,6 @@ class TestDistribBugs(unittest.TestCase):
             model.connect('D1.out_dist', 'D2.in_dist')
             model.connect('D1.out_nd', 'D2.in_nd')
 
-        prob = om.Problem(model)
         prob.setup(mode=mode, force_alloc_complex=True)
 
         self.x_dist_init = x_dist_init = (3.0 + np.arange(size)[offsets[rank]:offsets[rank] + sizes[rank]]) * .1
@@ -2465,24 +2415,6 @@ class TestDistribBugs(unittest.TestCase):
         prob.run_model()
 
         return prob
-
-    def _compare_totals(self, totals):
-        fails = []
-        for key, val in totals.items():
-            Jname = 'J_fwd' if 'J_fwd' in val else 'J_rev'
-            idx = 0 if 'J_fwd' in val else 1
-            try:
-                analytic = val[Jname]
-                fd = val['J_fd']
-            except Exception as err:
-                self.fail(f"For key {key}: {err}")
-            try:
-                assert_near_equal(val['rel error'][idx], 0.0, 1e-6)
-            except ValueError as err:
-                fails.append((key, val, err, Jname))
-        if fails:
-            msg = '\n\n'.join([f"Totals differ for {key}:\nAnalytic:\n{val[Jname]}\nFD:\n{val['J_fd']}\n{err}" for key, val, err, Jname in fails])
-            self.fail(msg)
 
     def test_get_val(self):
         prob = self.get_problem(Distrib_Derivs_Matfree, stacked=False)
@@ -2509,19 +2441,19 @@ class TestDistribBugs(unittest.TestCase):
         prob = self.get_problem(Distrib_Derivs_Matfree, mode='fwd')
         totals = prob.check_totals(method='cs', out_stream=None, of=['D1.out_nd', 'D1.out_dist'],
                                         wrt=['indep.x_serial', 'indep.x_dist'])
-        self._compare_totals(totals)
+        assert_check_totals(totals)
 
     def test_check_totals_prod_fwd(self):
         prob = self.get_problem(Distrib_Derivs_Prod_Matfree, mode='fwd')
         totals = prob.check_totals(method='cs', out_stream=None, of=['D1.out_nd', 'D1.out_dist'],
                                         wrt=['indep.x_serial', 'indep.x_dist'])
-        self._compare_totals(totals)
+        assert_check_totals(totals)
 
     def test_check_totals_rev(self):
         prob = self.get_problem(Distrib_Derivs_Matfree, mode='rev')
         totals = prob.check_totals(method='cs', out_stream=None, of=['D1.out_nd', 'D1.out_dist'],
                                                    wrt=['indep.x_serial', 'indep.x_dist'])
-        self._compare_totals(totals)
+        assert_check_totals(totals)
 
     def test_check_totals_rev_old(self):
         prob = self.get_problem(Distrib_Derivs_Matfree_Old, mode='rev')
@@ -2547,31 +2479,31 @@ class TestDistribBugs(unittest.TestCase):
         prob = self.get_problem(Distrib_Derivs_Prod_Matfree, mode='rev')
         totals = prob.check_totals(method='cs', out_stream=None, of=['D1.out_nd', 'D1.out_dist'],
                                                    wrt=['indep.x_serial', 'indep.x_dist'])
-        self._compare_totals(totals)
+        assert_check_totals(totals)
 
     def test_check_totals_fwd_stacked(self):
         prob = self.get_problem(Distrib_Derivs_Matfree, mode='fwd', stacked=True)
         totals = prob.check_totals(method='cs', out_stream=None, of=['D2.out_nd', 'D2.out_dist'],
                                         wrt=['indep.x_serial', 'indep.x_dist'])
-        self._compare_totals(totals)
+        assert_check_totals(totals)
 
     def test_check_totals_prod_fwd_stacked(self):
         prob = self.get_problem(Distrib_Derivs_Prod_Matfree, mode='fwd', stacked=True)
         totals = prob.check_totals(method='cs', out_stream=None, of=['D2.out_nd', 'D2.out_dist'],
                                         wrt=['indep.x_serial', 'indep.x_dist'])
-        self._compare_totals(totals)
+        assert_check_totals(totals)
 
     def test_check_totals_rev_stacked(self):
         prob = self.get_problem(Distrib_Derivs_Matfree, mode='rev', stacked=True)
         totals = prob.check_totals(method='cs', out_stream=None, of=['D2.out_nd', 'D2.out_dist'],
                                                    wrt=['indep.x_serial', 'indep.x_dist'])
-        self._compare_totals(totals)
+        assert_check_totals(totals)
 
     def test_check_totals_prod_rev_stacked(self):
         prob = self.get_problem(Distrib_Derivs_Prod_Matfree, mode='rev', stacked=True)
         totals = prob.check_totals(method='cs', out_stream=None, of=['D2.out_nd', 'D2.out_dist'],
                                                    wrt=['indep.x_serial', 'indep.x_dist'])
-        self._compare_totals(totals)
+        assert_check_totals(totals)
 
     def test_check_partials_cs(self):
         prob = self.get_problem(Distrib_Derivs_Matfree)
@@ -2595,14 +2527,14 @@ class TestDistribBugs(unittest.TestCase):
 
     def test_check_err(self):
         with self.assertRaises(RuntimeError) as cm:
-            prob = self.get_problem(Distrib_DerivsErr)
+            self.get_problem(Distrib_DerivsErr)
 
         msg = "'D1' <class Distrib_DerivsErr>: component has defined partial ('out_nd', 'in_dist') which is a non-distributed output wrt a distributed input. This is only supported using the matrix free API."
         self.assertEqual(str(cm.exception), msg)
 
     def test_fd_check_err(self):
         with self.assertRaises(RuntimeError) as cm:
-            prob = self.get_problem(Distrib_DerivsFD, mode='fwd')
+            self.get_problem(Distrib_DerivsFD, mode='fwd')
 
         msg = "'D1' <class Distrib_DerivsFD>: component has defined partial ('out_nd', 'in_dist') which is a non-distributed output wrt a distributed input. This is only supported using the matrix free API."
         self.assertEqual(str(cm.exception), msg)
@@ -2631,14 +2563,14 @@ class TestDistribBugs(unittest.TestCase):
 
         prob.run_driver()
 
-        desvar = prob.driver.get_design_var_values()
+        prob.driver.get_design_var_values()
         con = prob.driver.get_constraint_values()
 
         assert_near_equal(con['f_xy'], 24.0)
         assert_near_equal(con['a2'], 24.96)
 
         totals = prob.check_totals(method='cs', out_stream=None)
-        self._compare_totals(totals)
+        assert_check_totals(totals)
 
     def test_dist_desvar_dist_input(self):
         class SimpleSum(om.ExplicitComponent):

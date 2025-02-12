@@ -2,7 +2,6 @@
 Unit tests for the structured metamodel component.
 """
 import unittest
-import inspect
 
 import numpy as np
 from numpy.testing import assert_almost_equal
@@ -16,15 +15,14 @@ from openmdao.utils.testing_utils import use_tempdirs, force_check_partials
 
 scipy_gte_019 = True
 try:
-    from scipy.interpolate._bsplines import make_interp_spline
+    from scipy.interpolate._bsplines import make_interp_spline  # noqa: F401
 except ImportError:
     scipy_gte_019 = False
 
 # check that pyoptsparse is installed
 # if it is, try to use SNOPT but fall back to SLSQP
 OPT, OPTIMIZER = set_pyoptsparse_opt('SNOPT')
-if OPTIMIZER:
-    from openmdao.drivers.pyoptsparse_driver import pyOptSparseDriver
+
 
 x = np.array([-0.97727788, -0.15135721, -0.10321885,  0.40015721,  0.4105985,
                0.95008842,  0.97873798,  1.76405235,  1.86755799,  2.2408932 ])
@@ -530,7 +528,7 @@ class TestMetaModelStructuredScipy(unittest.TestCase):
         #   happen with f or g first. The order those are evaluated comes from the keys of
         #   dict so no guarantee on the order except for Python 3.6 !
         msg = "'comp' <class MetaModelStructuredComp>: Error interpolating output '[f|g]' because input 'comp.z' was " \
-              "out of bounds \('.*', '.*'\) with value '9.0'"
+              r"out of bounds \('.*', '.*'\) with value '9.0'"
         with self.assertRaisesRegex(om.AnalysisError, msg):
             self.run_and_check_derivs(self.prob)
 
@@ -575,7 +573,7 @@ class TestMetaModelStructuredScipy(unittest.TestCase):
         tol = 1e-5
         assert_near_equal(prob['f'], val0, tol)
         assert_near_equal(prob['g'], val1, tol)
-        self.run_and_check_derivs(prob)
+        self.run_and_check_derivs(prob, atol=3e-4)
 
     def test_dynamic_training(self):
         p1 = np.linspace(0, 100, 25)
@@ -628,7 +626,7 @@ class TestMetaModelStructuredScipy(unittest.TestCase):
         prob.run_model()
 
         chk = prob.check_totals(of='comp.f', wrt=['tab.k', 'comp.p1', 'comp.p2', 'comp.p3'],
-                                method='cs', out_stream=None);
+                                method='cs', out_stream=None)
         assert_check_totals(chk, atol=1e-10, rtol=1e-10)
 
     def test_training_gradient_setup_called_twice(self):
@@ -683,21 +681,15 @@ class TestMetaModelStructuredScipy(unittest.TestCase):
         tol = 1e-5
         assert_near_equal(prob['f'], val0, tol)
         assert_near_equal(prob['g'], val1, tol)
-        self.run_and_check_derivs(prob)
+        self.run_and_check_derivs(prob, atol=5e-4, rtol=2e-5)
 
-    def run_and_check_derivs(self, prob, tol=1e-5, verbose=False):
+    def run_and_check_derivs(self, prob, atol=1e-5, rtol=2e-5):
         """Runs check_partials and compares to analytic derivatives."""
 
         prob.run_model()
 
         derivs = force_check_partials(prob, out_stream=None)
-
-        for i in derivs['comp'].keys():
-            if verbose:
-                print("Checking derivative pair:", i)
-            if derivs['comp'][i]['J_fwd'].sum() != 0.0:
-                rel_err = derivs['comp'][i]['rel error'][0]
-                self.assertLessEqual(rel_err, tol)
+        assert_check_partials(derivs, atol=atol, rtol=rtol)
 
     def test_error_msg_vectorized(self):
         # Tests bug in error message where it doesn't give the correct node value.
@@ -771,19 +763,13 @@ class TestMetaModelStructuredPython(unittest.TestCase):
         self.prob['y'] = 0.75
         self.prob['z'] = -1.7
 
-    def run_and_check_derivs(self, prob, tol=1e-5, verbose=False):
+    def run_and_check_derivs(self, prob, atol=1e-5, rtol=1e-5, verbose=False):
         """Runs check_partials and compares to analytic derivatives."""
 
         prob.run_model()
 
         derivs = force_check_partials(prob, method='cs', out_stream=None)
-
-        for i in derivs['comp'].keys():
-            if verbose:
-                print("Checking derivative pair:", i)
-            if derivs['comp'][i]['J_fwd'].sum() != 0.0:
-                rel_err = derivs['comp'][i]['rel error'][0]
-                self.assertLessEqual(rel_err, tol)
+        assert_check_partials(derivs, atol=atol, rtol=rtol)
 
     def test_deriv1(self):
         # run at default pt
@@ -1088,7 +1074,7 @@ class TestMetaModelStructuredPython(unittest.TestCase):
         prob.setup()
         prob.run_model()
 
-        self.run_and_check_derivs(prob)
+        self.run_and_check_derivs(prob, atol=1e-4)
 
     def test_training_gradient_akima(self):
         model = om.Group()
@@ -1129,11 +1115,6 @@ class TestMetaModelStructuredPython(unittest.TestCase):
         # Mimics usage as an order-reducing interpolating polynomial.
         model = om.Group()
         ivc = om.IndepVarComp()
-
-        mapdata = SampleMap()
-
-        params = mapdata.param_data
-        outs = mapdata.output_data
 
         ivc.add_output('x', np.array([.33]))
 
@@ -1209,10 +1190,6 @@ class TestMetaModelStructuredPython(unittest.TestCase):
     def test_training_gradient_unsupported(self):
         # If using a fixed table method
         model = om.Group()
-        mapdata = SampleMap()
-
-        params = mapdata.param_data
-        outs = mapdata.output_data
 
         comp = om.MetaModelStructuredComp(training_data_gradients=True, extrapolate=True,
                                           method='1D-akima', vec_size=1)
@@ -1234,10 +1211,7 @@ class TestMetaModelStructuredPython(unittest.TestCase):
 
     def test_vectorized_1D_akima(self):
         model = om.Group()
-        mapdata = SampleMap()
 
-        params = mapdata.param_data
-        outs = mapdata.output_data
         nn = 2
 
         comp = om.MetaModelStructuredComp(extrapolate=True,
@@ -1462,8 +1436,7 @@ class TestMetaModelStructuredCompFeature(unittest.TestCase):
         force_check_partials(prob, compact_print=True)
 
     def test_error_messages_scalar_only(self):
-        prob = om.Problem()
-        model = prob.model
+        om.Problem()
 
         comp = om.MetaModelStructuredComp(training_data_gradients=True,
                                           method='slinear', vec_size=3)

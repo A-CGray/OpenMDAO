@@ -1,6 +1,5 @@
 """Test the Broyden nonlinear solver. """
 
-import os
 import unittest
 
 import numpy as np
@@ -12,14 +11,12 @@ from openmdao.test_suite.components.implicit_newton_linesearch import ImplCompTw
 from openmdao.test_suite.components.sellar import SellarStateConnection, SellarDerivatives, \
      SellarDis1withDerivatives, SellarDis2withDerivatives
 from openmdao.test_suite.scripts.circuit_analysis import Circuit
-from openmdao.utils.assert_utils import assert_near_equal, assert_warning
-from openmdao.utils.array_utils import evenly_distrib_idxs
+from openmdao.utils.assert_utils import assert_near_equal, assert_warning, assert_check_totals
 
 try:
     from openmdao.vectors.petsc_vector import PETScVector
 except ImportError:
     PETScVector = None
-from openmdao.utils.mpi import MPI
 
 
 class VectorEquation(om.ImplicitComponent):
@@ -70,8 +67,6 @@ class MixedEquation(om.ImplicitComponent):
         residuals['x45'] = res[3:]
 
     def linearize(self, inputs, outputs, jacobian):
-        c = inputs['c']
-        x = np.empty((5, ))
         x12 = outputs['x12']
         x3 = outputs['x3']
         x45 = outputs['x45']
@@ -184,8 +179,8 @@ class TestBryoden(unittest.TestCase):
         # Test top level Sellar (i.e., not grouped).
 
         prob = om.Problem()
-        model = prob.model = SellarStateConnection(nonlinear_solver=om.BroydenSolver(),
-                                                   linear_solver=om.LinearRunOnce())
+        prob.model = SellarStateConnection(nonlinear_solver=om.BroydenSolver(),
+                                           linear_solver=om.LinearRunOnce())
 
         prob.setup()
 
@@ -616,9 +611,7 @@ class TestBryoden(unittest.TestCase):
         prob.run_model()
 
         totals = prob.check_totals(method='cs', out_stream=None)
-
-        for key, val in totals.items():
-            assert_near_equal(val['rel error'][0], 0.0, 1e-6)
+        assert_check_totals(totals)
 
     def test_cs_around_broyden_compute_jac(self):
         # Basic sellar test.
@@ -658,9 +651,7 @@ class TestBryoden(unittest.TestCase):
         sub.nonlinear_solver.options['compute_jacobian'] = True
 
         totals = prob.check_totals(method='cs', out_stream=None)
-
-        for key, val in totals.items():
-            assert_near_equal(val['rel error'][0], 0.0, 1e-6)
+        assert_check_totals(totals)
 
     def test_cs_around_broyden_compute_jac_dense(self):
         # Basic sellar test.
@@ -700,9 +691,7 @@ class TestBryoden(unittest.TestCase):
         sub.nonlinear_solver.options['compute_jacobian'] = True
 
         totals = prob.check_totals(method='cs', out_stream=None)
-
-        for key, val in totals.items():
-            assert_near_equal(val['rel error'][0], 0.0, 1e-6)
+        assert_check_totals(totals)
 
     def test_complex_step(self):
         prob = om.Problem()
@@ -740,9 +729,7 @@ class TestBryoden(unittest.TestCase):
         prob.run_model()
 
         totals = prob.check_totals(method='cs', out_stream=None)
-
-        for key, val in totals.items():
-            assert_near_equal(val['rel error'][0], 0.0, 1e-7)
+        assert_check_totals(totals)
 
 
 # Commented the following test out until we fix the broyden check

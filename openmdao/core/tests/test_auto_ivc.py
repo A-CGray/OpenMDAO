@@ -1,13 +1,11 @@
 import unittest
-import time
 from collections.abc import Iterable
 
 import numpy as np
 
 import openmdao.api as om
 from openmdao.utils.mpi import MPI
-from openmdao.utils.array_utils import evenly_distrib_idxs, take_nth
-from openmdao.utils.assert_utils import assert_near_equal, assert_warning
+from openmdao.utils.assert_utils import assert_check_totals
 
 try:
     from parameterized import parameterized
@@ -30,7 +28,7 @@ def _test_func_name(func, num, param):
         for item in p:
             try:
                 arg = item.__name__
-            except:
+            except Exception:
                 arg = str(item)
             args.append(arg)
     return func.__name__ + '_' + '_'.join(args)
@@ -244,9 +242,7 @@ class SerialTests(unittest.TestCase):
         p['indep.x'] = [9.9]
         p['indep.g'] = 9.80665
         p.run_model()
-        totals = p.check_totals(compact_print=True, method='cs', out_stream=None)
-        for key, meta in totals.items():
-            np.testing.assert_allclose(meta['abs error'][0], 0.)
+        assert_check_totals(p.check_totals(show_only_incorrect=True, method='cs', out_stream=None))
 
     def test_set_val_auto_ivc(self):
         p = om.Problem()

@@ -2,44 +2,23 @@
 import os
 import re
 import sys
-import types
+from types import TracebackType
 import unittest
 from contextlib import contextmanager
 from fnmatch import fnmatchcase
 from io import StringIO
 from numbers import Integral
-from inspect import currentframe, getouterframes
+from inspect import currentframe, getouterframes, stack, isfunction, ismethod
 
 from collections.abc import Iterable
 
 import numpy as np
 
-from openmdao.core.constants import INF_BOUND
+from openmdao.core.constants import INF_BOUND, _UNDEFINED
 from openmdao.utils.array_utils import shape_to_len
 
 
 _float_inf = float('inf')
-
-
-def _convert_auto_ivc_to_conn_name(conns_dict, name):
-    """
-    Convert name of auto_ivc val to promoted input name.
-
-    Parameters
-    ----------
-    conns_dict : dict
-        Dictionary of global connections.
-    name : str
-        Name of auto_ivc to be found.
-
-    Returns
-    -------
-    str
-        Promoted input name.
-    """
-    for key, val in conns_dict.items():
-        if val == name:
-            return key
 
 
 def ensure_compatible(name, value, shape=None, indices=None):
@@ -486,11 +465,57 @@ def pad_name(name, width=10, quotes=False):
         return f"{name}"
 
 
-def add_border(msg, borderstr='=', vpad=0):
+def get_max_widths(rows):
     """
-    Add border lines before and after a message.
+    Determine the maximum width of each column.
 
-    The message is assumed not to span multiple lines.
+    Parameters
+    ----------
+    rows : list of list of str
+        List of rows, where each row is a list of strings.
+
+    Returns
+    -------
+    list of int
+        List of maximum widths for each column.
+    """
+    if not rows:
+        return []
+
+    for irow, row in enumerate(rows):
+        if irow == 0:
+            widths = [len(val) for val in row]
+        else:
+            for i, val in enumerate(row):
+                widths[i] = max(widths[i], len(val))
+    return widths
+
+
+def strs2row_iter(strs, colwidths, delim=' '):
+    """
+    Yield rows of strings formatted into columns.
+
+    Parameters
+    ----------
+    strs : list of str
+        List of strings to be formatted into columns.
+    colwidths : list of int
+        List of column widths.
+    delim : str
+        Delimiter to use between columns.
+
+    Yields
+    ------
+    str
+        Formatted row of strings.
+    """
+    for row in strs:
+        yield delim.join(f"{val:<{width}}" for val, width in zip(row, colwidths))
+
+
+def add_border(msg, borderstr='=', vpad=0, above=True, below=True):
+    """
+    Add border lines before and/or after a message.
 
     Parameters
     ----------
@@ -499,18 +524,26 @@ def add_border(msg, borderstr='=', vpad=0):
     borderstr : str
         The repeating string to be used in the border.
     vpad : int
-        The number of blank lines between the border and the message (before and after).
+        The number of blank lines between the border(s) and the message.
+    above : bool
+        If True, add a border above the message.
+    below : bool
+        If True, add a border below the message.
 
     Returns
     -------
     str
-        A string containing the original message enclosed in a border.
+        A string containing the original message and border(s) before and/or after.
     """
-    border = len(msg) * borderstr
+    width = max(len(line) for line in msg.split('\n'))
+    border = width * borderstr
     # handle borderstr of more than 1 char
-    border = border[:len(msg)]
-    padding = '\n' * (vpad + 1)
-    return f"{border}{padding}{msg}{padding}{border}"
+    border = border[:width]
+    uborder = border if above else ''
+    lborder = border if below else ''
+    upadding = '\n' * (vpad + 1) if uborder else '\n' * vpad
+    lpadding = '\n' * vpad if vpad else '\n'
+    return f"{uborder}{upadding}{msg}{lpadding}{lborder}"
 
 
 def run_model(prob, ignore_exception=False):
@@ -689,9 +722,7 @@ def make_serializable(o):
     if isinstance(o, _container_classes):
         return [make_serializable(item) for item in o]
     elif isinstance(o, dict):
-        s_key = [make_serializable_key(item) for item in o.keys()]
-        s_val = [make_serializable(item) for item in o.values()]
-        return dict(zip(s_key, s_val))
+        return {make_serializable_key(k): make_serializable(v) for k, v in o.items()}
     elif isinstance(o, np.ndarray):
         return o.tolist()
     elif isinstance(o, np.number):
@@ -757,9 +788,7 @@ def default_noraise(o):
     if isinstance(o, _container_classes):
         return [default_noraise(item) for item in o]
     elif isinstance(o, dict):
-        s_key = [make_serializable_key(item) for item in o.keys()]
-        s_val = [default_noraise(item) for item in o.values()]
-        return dict(zip(s_key, s_val))
+        return {make_serializable_key(k): default_noraise(v) for k, v in o.items()}
     elif isinstance(o, np.ndarray):
         return o.tolist()
     elif isinstance(o, np.number):
@@ -1109,6 +1138,29 @@ def convert_src_inds(parent_src_inds, parent_src_shape, my_src_inds, my_src_shap
         return parent_src_inds.shaped_array(flat=False).reshape(my_src_shape)[my_src_inds()]
 
 
+def is_undefined(obj):
+    """
+    Return True if the object is _UNDEFINED.
+
+    This function should be used instead of `{obj} is _UNDEFINED`, which
+    is not reliable across processes. The use of `{obj} == _UNDEFINED` will
+    fail if `obj` is an array.
+
+    Parameters
+    ----------
+    obj : any
+        Any python object.
+
+    Returns
+    -------
+    bool
+        True if the obj is not an array, and obj == _UNDEFINED.
+    """
+    if isinstance(obj, Iterable):
+        return False
+    return obj == _UNDEFINED
+
+
 def shape2tuple(shape):
     """
     Return shape as a tuple.
@@ -1187,7 +1239,7 @@ def wing_dbg():
         new = sys.path[:] + [os.environ['WINGHOME']]
         sys.path = new
         try:
-            import wingdbstub
+            import wingdbstub  # noqa: F401
         finally:
             sys.path = save
 
@@ -1347,7 +1399,7 @@ def make_traceback():
         The newly constructed traceback.
     """
     finfo = getouterframes(currentframe())[2]
-    return types.TracebackType(None, finfo.frame, finfo.frame.f_lasti, finfo.frame.f_lineno)
+    return TracebackType(None, finfo.frame, finfo.frame.f_lasti, finfo.frame.f_lineno)
 
 
 if env_truthy('OM_DBG'):
@@ -1469,3 +1521,301 @@ def vprint(it, end='\n', getter=None, file=None):
         if getter is not None:
             val = getter(val)
         print(val, end=end, file=file)
+
+
+def _default_predicate(name, obj):
+    """
+    Determine if a given method should be traced.
+
+    Parameters
+    ----------
+    name : str
+        Name of the method.
+    obj : object
+        The object being checked.
+
+    Returns
+    -------
+    bool
+        True if the method should be traced.
+    """
+    for n in ['solve', 'apply', 'compute', 'setup', 'coloring', 'linearize', 'get_outputs_dir',
+              'approx', 'static', 'get_vars', 'abs_get']:
+        if n in name:
+            return True
+    return False
+
+
+_trace_predicate = _default_predicate
+
+
+def set_trace_predicate(funct):
+    """
+    Set the function that determines which methods will be traced.
+
+    Parameters
+    ----------
+    funct : function
+        Set of functions to be traced.
+    """
+    global _trace_predicate
+    _trace_predicate = funct
+
+
+def _decorate_functs(attrs, predicate, decorator):
+    """
+    Decorate the functions in the given attribute dict.
+
+    Parameters
+    ----------
+    cname : str
+        The name of the class containing the functions.
+    attrs : dict
+        The attribute dict containing the functions to be decorated.
+    predicate : function
+        Function returning True if the function should be decorated.
+    decorator : function
+        The decorator function.
+    """
+    for name, obj in attrs.items():
+        if (isfunction(obj) or ismethod(obj)) and predicate(name, obj):
+            attrs[name] = decorator(obj)
+
+
+SystemMetaclass = type
+ProblemMetaclass = type
+SolverMetaclass = type
+DriverMetaclass = type
+DebugMeta = type
+
+
+def om_dump(*args, **kwargs):
+    r"""
+    Do nothing.
+
+    Parameters
+    ----------
+    *args : list
+        Positional args.
+    **kwargs : dict
+        Named args.
+    """
+    pass
+
+
+def dbg(funct):
+    """
+    Do nothing.
+
+    Parameters
+    ----------
+    funct : function
+        The function being decorated.
+
+    Returns
+    -------
+    function
+        The function.
+    """
+    return funct
+
+
+def _wrap_comm(comm, scope=None):
+    return comm
+
+
+def _unwrap_comm(comm):
+    return comm
+
+
+_om_dump = env_truthy('OPENMDAO_DUMP')
+# OPENMDAO_DUMP can have values like 'stdout', 'stderr', 'rank', 'pid', 'rank,pid', 'pid,rank'
+# 'rank' means to include the rank in the dump file name, e.g., om_dump_0.out
+# 'pid' means to include the pid in the dump file name, e.g., om_dump_12345.out
+# if rank and pid are both included, the file name will be, e.g., om_dump_0_12345.out
+# 'stdout' means to dump to stdout (so rank and pid are ignored)
+# 'stderr' means to dump to stderr (so rank and pid are ignored)
+# 'trace' means to print function entry and exit
+# 'args' means to print function entry and exit with args and kwargs if trace is also included
+# if OPENMDAO_DUMP is just a plain truthy value, like '1', then we dump to a file
+# named om_dump.out.
+
+if _om_dump:
+    parts = [s.strip() for s in os.environ['OPENMDAO_DUMP'].split(',')]
+    trace = 'trace' in parts
+
+    if 'stdout' in parts:
+        _dump_stream = sys.stdout
+    elif 'stderr' in parts:
+        _dump_stream = sys.stderr
+    else:
+        rankstr = pidstr = ''
+        if 'rank' in parts:
+            from openmdao.utils.mpi import MPI
+            rankstr = f"_{MPI.COMM_WORLD.rank if MPI else 0}"
+
+        if 'pid' in parts:
+            pidstr = f"_{os.getpid()}"
+
+        _dump_stream = open(f'om_dump{rankstr}{pidstr}.out', 'w')
+
+    _show_args = 'args' in parts
+
+    def om_dump(*args, **kwargs):
+        """
+        Dump to a stream if OPENMDAO_DUMP is truthy in the environment.
+
+        Depending on the value of OPENMDAO_DUMP, output will go to file(s), stdout, or stderr.
+
+        Parameters
+        ----------
+        args : list
+            Positional args.
+        kwargs : dict
+            Named args.
+        """
+        kwargs['file'] = _dump_stream
+        kwargs['flush'] = True
+        print(*args, **kwargs)
+
+    def dbg(cname):
+        """
+        Decorate function to print function entry and exit.
+
+        Parameters
+        ----------
+        cname : str
+            The name of the class containing the function.
+
+        Returns
+        -------
+        function
+            The decorated function.
+        """
+        def _dbg(funct):
+            def wrapper(*args, **kwargs):
+                try:
+                    path = args[0].pathname + '.'
+                except Exception:
+                    path = ''
+                indent = call_depth2indent()
+                if _show_args:
+                    argstr = f"(args={args}, kwargs={kwargs})"
+                else:
+                    argstr = ''
+                om_dump(f"{indent}--> {cname}:{path}{funct.__name__}{argstr}")
+                ret = funct(*args, **kwargs)
+                om_dump(f"{indent}<-- {cname}:{path}{funct.__name__}")
+                return ret
+
+            return wrapper
+        return _dbg
+
+    if trace:
+        class DebugMeta(type):
+            """
+            A metaclass to add trace output to some methods of the class.
+
+            Parameters
+            ----------
+            name : str
+                The name of the class.
+            bases : tuple
+                The base classes of the class.
+            attrs : dict
+                The attributes of the class.
+
+            Returns
+            -------
+            class
+                The class with the metaclass applied.
+            """
+
+            def __new__(metaclass, name, bases, attrs):
+                """
+                Add trace output to some methods of the class.
+
+                Parameters
+                ----------
+                name : str
+                    The name of the class.
+                bases : tuple
+                    The base classes of the class.
+                attrs : dict
+                    The attributes of the class.
+
+                Returns
+                -------
+                class
+                    The class with trace output added to some methods
+                """
+                _decorate_functs(attrs, _trace_predicate, dbg(name))
+                return super().__new__(metaclass, name, bases, attrs)
+
+        SystemMetaclass = DebugMeta
+        ProblemMetaclass = DebugMeta
+        SolverMetaclass = DebugMeta
+        DriverMetaclass = DebugMeta
+
+        def _comm_debug_decorator(fn, scope):  # pragma no cover
+            def _wrap(*args, **kwargs):
+                sc = '' if scope is None else f"{scope}."
+                indent = call_depth2indent()
+                if _show_args:
+                    argstr = f"(args={args}, kwargs={kwargs})"
+                else:
+                    argstr = ''
+                om_dump(f"{indent}--> {sc}{fn.__name__}{argstr}")
+                ret = fn(*args, **kwargs)
+                om_dump(f"{indent}<-- {sc}{fn.__name__}")
+                return ret
+            return _wrap
+
+        class _DebugComm(object):  # pragma no cover
+            """
+            Debugging wrapper for an MPI communicator.
+            """
+
+            def __init__(self, comm, scope):
+                if isinstance(comm, _DebugComm):
+                    self.__dict__['_comm'] = comm._comm
+                else:
+                    self.__dict__['_comm'] = comm
+                self.__dict__['_scope'] = scope
+                for name in ['bcast', 'Bcast', 'gather', 'Gather', 'scatter', 'Scatter',
+                             'allgather', 'Allgather', 'Allgatherv', 'allreduce', 'Allreduce',
+                             'send', 'Send', 'recv', 'Recv', 'sendrecv', 'Sendrecv']:
+                    self.__dict__[name] = _comm_debug_decorator(getattr(self._comm, name), scope)
+
+            def __getattr__(self, name):
+                return getattr(self._comm, name)
+
+            def __setattr__(self, name, val):
+                setattr(self._comm, name, val)
+
+        def _wrap_comm(comm, scope=None):  # pragma no cover
+            return _DebugComm(comm, scope)
+
+        def _unwrap_comm(comm):  # pragma no cover
+            if isinstance(comm, _DebugComm):
+                return comm._comm
+            return comm
+
+
+def call_depth2indent(tabsize=2, offset=-1):
+    """
+    Return a string of spaces corresponding to the current call depth.
+
+    Parameters
+    ----------
+    tabsize : int
+        Number of spaces per tab.
+    offset : int
+        Offset to add to the call depth.
+
+    Returns
+    -------
+    str
+        A string of spaces.
+    """
+    return ' ' * ((len(stack()) + offset) * tabsize)

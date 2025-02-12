@@ -3,7 +3,8 @@ import unittest
 import numpy as np
 
 import openmdao.api as om
-from openmdao.utils.assert_utils import assert_near_equal, assert_check_partials
+from openmdao.utils.assert_utils import assert_near_equal, assert_check_partials, \
+    assert_check_totals
 
 
 class MyCompApprox(om.ImplicitComponent):
@@ -250,68 +251,64 @@ class ResidNamingTestCase(unittest.TestCase):
         assert_check_partials(prob.check_partials(method='cs', out_stream=None), atol=1e-5)
 
         totals = prob.check_totals(method='cs', out_stream=None)
-        for val in totals.values():
-            assert_near_equal(val['rel error'][0], 0.0, 1e-10)
+        assert_check_totals(totals)
 
     def test_approx2(self):
         prob = self._build_model(MyCompApprox2)
         assert_check_partials(prob.check_partials(method='cs', out_stream=None), atol=1e-5)
 
         totals = prob.check_totals(method='cs', out_stream=None)
-        for val in totals.values():
-            assert_near_equal(val['rel error'][0], 0.0, 1e-10)
+        assert_check_totals(totals)
 
     def test_size_mismatch(self):
         with self.assertRaises(Exception) as cm:
-            prob = self._build_model(MyCompSizeMismatch)
+            self._build_model(MyCompSizeMismatch)
 
         self.assertEqual(cm.exception.args[0], "'MyComp' <class MyCompSizeMismatch>: The number of residuals (3) doesn't match number of outputs (2).  If any residuals are added using 'add_residuals', their total size must match the total size of the outputs.")
 
     def test_ref_shape_mismatch(self):
         with self.assertRaises(Exception) as cm:
-            prob = self._build_model(MyCompShapeMismatch)
+            self._build_model(MyCompShapeMismatch)
 
         self.assertEqual(cm.exception.args[0], "'MyComp' <class MyCompShapeMismatch>: When adding residual 'res1', expected shape (1,) but got shape (1, 2) for argument 'ref'.")
 
     def test_bad_unit(self):
         with self.assertRaises(Exception) as cm:
-            prob = self._build_model(MyCompBadUnits)
+            self._build_model(MyCompBadUnits)
 
         self.assertEqual(cm.exception.args[0], "'MyComp' <class MyCompBadUnits>: The units 'foobar/baz' are invalid.")
 
     def test_unit_mismatch(self):
         with self.assertRaises(Exception) as cm:
-            prob = self._build_model(MyCompUnitsMismatch)
+            self._build_model(MyCompUnitsMismatch)
 
         self.assertEqual(cm.exception.args[0], "'MyComp' <class MyCompUnitsMismatch>: residual units 'inch' for residual 'res1' != output res_units 'ft' for output 'Re'.")
 
     def test_ref_mismatch(self):
         with self.assertRaises(Exception) as cm:
-            prob = self._build_model(MyCompRefMismatch)
+            self._build_model(MyCompRefMismatch)
 
         self.assertEqual(cm.exception.args[0], "'MyComp' <class MyCompRefMismatch>: (4.0 != 3.0), 'ref' for residual 'res1' != 'res_ref' for output 'Re'.")
 
     def test_ref_mismatch_default_no_exception(self):
-        prob = self._build_model(MyCompRefMismatchDefault)
+        self._build_model(MyCompRefMismatchDefault)
 
     def test_ref_mismatch_default2_no_exception(self):
-        prob = self._build_model(MyCompRefMismatchDefault2)
+        self._build_model(MyCompRefMismatchDefault2)
 
     def test_analytic(self):
         prob = self._build_model(MyCompAnalytic)
         assert_check_partials(prob.check_partials(method='cs', out_stream=None))
 
         totals = prob.check_totals(method='cs', out_stream=None)
-        for val in totals.values():
-            assert_near_equal(val['rel error'][0], 0.0, 1e-12)
+        assert_check_totals(totals)
 
     def test_analytic2(self):
         prob = self._build_model(MyCompAnalytic2)
         assert_check_partials(prob.check_partials(method='cs', out_stream=None))
 
         totals = prob.check_totals(method='cs', out_stream=None)
-        for val in totals.values():
-            assert_near_equal(val['rel error'][0], 0.0, 1e-12)
+        assert_check_totals(totals)
 
 
 class _InputResidComp(om.ImplicitComponent):

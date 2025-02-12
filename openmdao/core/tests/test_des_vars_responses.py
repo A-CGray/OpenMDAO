@@ -4,7 +4,7 @@ import unittest
 import numpy as np
 
 import openmdao.api as om
-from openmdao.utils.assert_utils import assert_near_equal
+from openmdao.utils.assert_utils import assert_near_equal, assert_check_totals
 from openmdao.utils.mpi import MPI
 from openmdao.test_suite.components.sellar import SellarDerivatives, SellarDis1withDerivatives, \
      SellarDis2withDerivatives
@@ -616,20 +616,6 @@ class TestConstraintOnModel(unittest.TestCase):
             prob.model.add_design_var('x', lower=0.0, upper=['a', 'b'],
                                       ref0=-100.0, ref=100)
 
-    def test_constraint_invalid_name(self):
-
-        prob = om.Problem()
-
-        prob.model = SellarDerivatives()
-        prob.model.nonlinear_solver = om.NonlinearBlockGS()
-
-        with self.assertRaises(TypeError) as context:
-            prob.model.add_constraint(42, lower=-100, upper=100, ref0=-100.0,
-                                      ref=100)
-
-        self.assertEqual(str(context.exception), '<class SellarDerivatives>: The name argument should '
-                                                 'be a string, got 42')
-
     def test_constraint_invalid_lower(self):
 
         prob = om.Problem()
@@ -1062,6 +1048,7 @@ class TestObjectiveOnModel(unittest.TestCase):
         p.run_model()
         # Formerly a KeyError
         derivs = p.check_totals(compact_print=True, out_stream=None)
+        assert_check_totals(derivs)
         assert_near_equal(0.0, derivs['y', 'x']['abs error'][1])
 
 

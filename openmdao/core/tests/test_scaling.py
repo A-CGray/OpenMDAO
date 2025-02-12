@@ -6,12 +6,13 @@ import numpy as np
 
 import openmdao.api as om
 from openmdao.core.driver import Driver
-from openmdao.utils.testing_utils import use_tempdirs
 
 from openmdao.test_suite.components.expl_comp_array import TestExplCompArrayDense
 from openmdao.test_suite.components.impl_comp_array import TestImplCompArrayDense
 from openmdao.utils.testing_utils import force_check_partials
-from openmdao.utils.assert_utils import assert_near_equal, assert_check_partials
+from openmdao.utils.assert_utils import assert_near_equal, assert_check_partials, \
+    assert_check_totals
+
 from openmdao.test_suite.components.unit_conv import SrcComp, TgtCompF
 
 
@@ -592,6 +593,17 @@ class TestScaling(unittest.TestCase):
             assert_near_equal(val[1, 0], 2.0/17)
             assert_near_equal(val[1, 1], 2.0/19)
 
+    def test_scale_array_with_array_and_slice_connection(self):
+        # this used to raise an AttributeError because it called .shape on an indexer
+        model = om.Group()
+        model.add_subsystem('C1', om.ExecComp('x = z', shape=(3, 3), x={'ref': np.ones((3, 3)) * 2.0}))
+        model.add_subsystem('C2', om.ExecComp('y = x', shape=3))
+        model.connect('C1.x', 'C2.x', src_indices=om.slicer[:, 1])
+
+        prob = om.Problem(model=model)
+        prob.setup()
+        prob.final_setup()
+
     def test_scale_and_add_array_with_array(self):
 
         class ExpCompArrayScale(TestExplCompArrayDense):
@@ -900,7 +912,7 @@ class TestScaling(unittest.TestCase):
 
         model.add_subsystem('p1', om.IndepVarComp('x1', 1.0))
         model.add_subsystem('p2', om.IndepVarComp('x2', 1.0))
-        comp = model.add_subsystem('comp', ScalingExample1())
+        model.add_subsystem('comp', ScalingExample1())
         model.connect('p1.x1', 'comp.x1')
         model.connect('p2.x2', 'comp.x2')
 
@@ -922,7 +934,7 @@ class TestScaling(unittest.TestCase):
 
         model.add_subsystem('p1', om.IndepVarComp('x1', 1.0))
         model.add_subsystem('p2', om.IndepVarComp('x2', 1.0))
-        comp = model.add_subsystem('comp', ScalingExample2())
+        model.add_subsystem('comp', ScalingExample2())
         model.connect('p1.x1', 'comp.x1')
         model.connect('p2.x2', 'comp.x2')
 
@@ -944,7 +956,7 @@ class TestScaling(unittest.TestCase):
 
         model.add_subsystem('p1', om.IndepVarComp('x1', 1.0))
         model.add_subsystem('p2', om.IndepVarComp('x2', 1.0))
-        comp = model.add_subsystem('comp', ScalingExample3())
+        model.add_subsystem('comp', ScalingExample3())
         model.connect('p1.x1', 'comp.x1')
         model.connect('p2.x2', 'comp.x2')
 
@@ -965,7 +977,7 @@ class TestScaling(unittest.TestCase):
         model = prob.model
 
         model.add_subsystem('p', om.IndepVarComp('x', np.ones((2))))
-        comp = model.add_subsystem('comp', ScalingExampleVector())
+        model.add_subsystem('comp', ScalingExampleVector())
         model.connect('p.x', 'comp.x')
 
         prob.setup()
@@ -1066,8 +1078,7 @@ class TestScaling(unittest.TestCase):
         problem.run_model()
 
         totals = problem.check_totals(out_stream=None)
-        assert_near_equal(totals['c', 'a1']['abs error'].reverse, 0.0, tolerance=1e-7)
-        assert_near_equal(totals['c', 'a2']['abs error'].reverse, 0.0, tolerance=1e-7)
+        assert_check_totals(totals)
 
         # Now, include unit conversion
 
@@ -1094,8 +1105,7 @@ class TestScaling(unittest.TestCase):
         problem.run_model()
 
         totals = problem.check_totals(out_stream=None)
-        assert_near_equal(totals['c', 'a1']['abs error'].reverse, 0.0, tolerance=1e-7)
-        assert_near_equal(totals['c', 'a2']['abs error'].reverse, 0.0, tolerance=1e-7)
+        assert_check_totals(totals)
 
     def test_totals_with_solver_scaling_part2(self):
         # Covers the part that the previous test missed, namely when the ref is in a different
@@ -1192,8 +1202,7 @@ class TestScaling(unittest.TestCase):
         problem.run_model()
 
         totals = problem.check_totals(compact_print=True)
-        assert_near_equal(totals['c', 'a1']['abs error'].reverse, 0.0, tolerance=3e-7)
-        assert_near_equal(totals['c', 'a2']['abs error'].reverse, 0.0, tolerance=3e-7)
+        assert_check_totals(totals)
 
 
 class MyComp(om.ExplicitComponent):
@@ -1214,9 +1223,7 @@ class MyComp(om.ExplicitComponent):
                            [1.0, 6.0, -2.3, 1.0],
                            [7.0, 5.0, 1.1, 2.2],
                            [-3.0, 2.0, 6.8, -1.5]
-                           ])
-        rows = np.repeat(np.arange(4), 4)
-        cols = np.tile(np.arange(4), 4)
+                          ])
 
         self.declare_partials(of='x3_u_u', wrt='x2_u_u', val=self.J[0, 0])
         self.declare_partials(of='x3_u_u', wrt='x2_u_s', val=self.J[0, 1])
@@ -1238,8 +1245,7 @@ class MyComp(om.ExplicitComponent):
         self.declare_partials(of='x3_s_s', wrt='x2_s_u', val=self.J[3, 2])
         self.declare_partials(of='x3_s_s', wrt='x2_s_s', val=self.J[3, 3])
 
-    def compute(self, inputs, outputs, discrete_inputs=None,
-                discrete_outputs=None):
+    def compute(self, inputs, outputs, discrete_inputs=None, discrete_outputs=None):
 
         outputs['x3_u_u'] = self.J[0, 0] * inputs['x2_u_u'] + self.J[0, 1] * inputs['x2_u_s'] + self.J[0, 2] * inputs['x2_s_u'] + self.J[0, 3] * inputs['x2_s_s']
         outputs['x3_u_s'] = self.J[1, 0] * inputs['x2_u_u'] + self.J[1, 1] * inputs['x2_u_s'] + self.J[1, 2] * inputs['x2_s_u'] + self.J[1, 3] * inputs['x2_s_s']
@@ -1314,7 +1320,7 @@ class TestScalingOverhaul(unittest.TestCase):
         inputs_comp.add_output('ox1_s_s', val=1.0)
 
         model.add_subsystem('p', inputs_comp)
-        mycomp = model.add_subsystem('comp', MyComp())
+        model.add_subsystem('comp', MyComp())
 
         model.connect('p.x1_u_u', 'comp.x2_u_u')
         model.connect('p.x1_u_s', 'comp.x2_u_s')
@@ -1398,9 +1404,7 @@ class TestScalingOverhaul(unittest.TestCase):
         assert_near_equal(driver.sens_dict['comp.x3_s_s']['p.x1_s_s'][0][0], J[3, 3] / 17.0 * 7.0)
 
         totals = prob.check_totals(compact_print=True, out_stream=None)
-
-        for (of, wrt) in totals:
-            assert_near_equal(totals[of, wrt]['abs error'][0], 0.0, 1e-7)
+        assert_check_totals(totals)
 
     def test_iimplicit(self):
         # Testing that our scale/unscale contexts leave the output vector in the correct state when
@@ -1412,7 +1416,7 @@ class TestScalingOverhaul(unittest.TestCase):
         inputs_comp.add_output('x1_u', val=1.0)
 
         model.add_subsystem('p', inputs_comp)
-        mycomp = model.add_subsystem('comp', MyImplicitComp())
+        model.add_subsystem('comp', MyImplicitComp())
 
         model.connect('p.x1_u', 'comp.x2_u')
 
@@ -1430,9 +1434,7 @@ class TestScalingOverhaul(unittest.TestCase):
         prob.run_model()
 
         totals = prob.check_totals(compact_print=True, out_stream=None)
-
-        for (of, wrt) in totals:
-            assert_near_equal(totals[of, wrt]['abs error'][0], 0.0, 1e-7)
+        assert_check_totals(totals)
 
 
 class TestResidualScaling(unittest.TestCase):
@@ -1493,7 +1495,7 @@ class TestResidualScaling(unittest.TestCase):
                 deltaV = inputs["V_in"] - inputs["V_out"]
                 Is = self.options["Is"]
                 Vt = self.options["Vt"]
-                I = Is * np.exp(deltaV / Vt)
+                I = Is * np.exp(deltaV / Vt)  # noqa: E741, allow "ambiguous" name I for current
 
                 J["I", "V_in"] = I / Vt
                 J["I", "V_out"] = -I / Vt

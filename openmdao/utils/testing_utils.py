@@ -3,13 +3,13 @@ import json
 import functools
 import builtins
 import os
+import shutil
 import re
-import sys
 from itertools import zip_longest
 from contextlib import contextmanager
+from pathlib import Path
 
 import numpy as np
-from scipy.sparse import coo_matrix
 
 try:
     from parameterized import parameterized
@@ -17,44 +17,14 @@ except ImportError:
     parameterized = None
 
 from openmdao.utils.general_utils import env_truthy, env_none
+from openmdao.utils.mpi import MPI
 
 
-def _new_setup(self):
-    import os
-    import tempfile
-
-    from openmdao.utils.mpi import MPI, multi_proc_exception_check
-    self.startdir = os.getcwd()
-    if MPI is None:
-        self.tempdir = tempfile.mkdtemp(prefix='testdir-')
-    elif MPI.COMM_WORLD.rank == 0:
-        self.tempdir = tempfile.mkdtemp(prefix='testdir-')
-        MPI.COMM_WORLD.bcast(self.tempdir, root=0)
-    else:
-        self.tempdir = MPI.COMM_WORLD.bcast(None, root=0)
-
-    os.chdir(self.tempdir)
-    if hasattr(self, 'original_setUp'):
-        if MPI is not None and MPI.COMM_WORLD.size > 1:
-            with multi_proc_exception_check(MPI.COMM_WORLD):
-                self.original_setUp()
-        else:
-            self.original_setUp()
-
-
-def _new_teardown(self):
-    import os
-    import shutil
-
-    from openmdao.utils.mpi import MPI, multi_proc_exception_check
-    if hasattr(self, 'original_tearDown'):
-        if MPI is not None and MPI.COMM_WORLD.size > 1:
-            with multi_proc_exception_check(MPI.COMM_WORLD):
-                self.original_tearDown()
-        else:
-            self.original_tearDown()
-
+def _cleanup_workdir(self):
     os.chdir(self.startdir)
+
+    if self.old_workdir:
+        os.environ['OPENMDAO_WORKDIR'] = self.old_workdir
 
     if MPI is None:
         rank = 0
@@ -64,10 +34,57 @@ def _new_teardown(self):
         rank = MPI.COMM_WORLD.rank
 
     if rank == 0:
-        try:
-            shutil.rmtree(self.tempdir)
-        except OSError:
-            pass
+        if not os.environ.get('OPENMDAO_KEEPDIRS'):
+            try:
+                shutil.rmtree(self.tempdir)
+            except OSError:
+                pass
+
+
+def _new_setup(self):
+    import os
+    import tempfile
+
+    from openmdao.utils.mpi import MPI, multi_proc_exception_check
+    self.startdir = os.getcwd()
+    self.old_workdir = os.environ.get('OPENMDAO_WORKDIR', '')
+
+    if MPI is None:
+        self.tempdir = tempfile.mkdtemp()
+    elif MPI.COMM_WORLD.rank == 0:
+        self.tempdir = tempfile.mkdtemp()
+        MPI.COMM_WORLD.bcast(self.tempdir, root=0)
+    else:
+        self.tempdir = MPI.COMM_WORLD.bcast(None, root=0)
+
+    os.chdir(self.tempdir)
+    # on mac tempdir is a symlink which messes some things up, so
+    # use resolve to get the real directory path
+    os.environ['OPENMDAO_WORKDIR'] = str(Path(self.tempdir).resolve())
+    try:
+        if hasattr(self, 'original_setUp'):
+            if MPI is not None and MPI.COMM_WORLD.size > 1:
+                with multi_proc_exception_check(MPI.COMM_WORLD):
+                    self.original_setUp()
+            else:
+                self.original_setUp()
+    except Exception:
+        _cleanup_workdir(self)
+        raise
+
+
+def _new_teardown(self):
+    from openmdao.utils.mpi import MPI, multi_proc_exception_check
+
+    try:
+        if hasattr(self, 'original_tearDown'):
+            if MPI is not None and MPI.COMM_WORLD.size > 1:
+                with multi_proc_exception_check(MPI.COMM_WORLD):
+                    self.original_tearDown()
+            else:
+                self.original_tearDown()
+    finally:
+        _cleanup_workdir(self)
 
 
 def use_tempdirs(cls):
@@ -249,7 +266,6 @@ def set_env_vars_context(**kwargs):
         for k, v in kwargs.items():
             saved[k] = os.environ.get(k)
             os.environ[k] = v  # will raise exception if v is not a string
-
         yield
 
     finally:
@@ -281,6 +297,87 @@ def force_check_partials(prob, *args, **kwargs):
         Total derivative comparison data.
     """
     return prob.check_partials(*args, **kwargs)
+
+
+def _fix_comp_check_data(data):
+    """
+    Modify the data dict to match the problem format if there is only one fd step size.
+
+    Parameters
+    ----------
+    data : dict
+        Dictionary containing derivative information keyed by subjac.
+    """
+    names = ['J_fd', 'abs error', 'rel error', 'magnitude', 'magnitude_rel',
+             'directional_fd_fwd', 'directional_fd_rev', 'denom_idx',
+             'vals_at_max_abs', 'vals_at_max_rel']
+
+    for name in names:
+        if name in data:
+            data[name] = data[name][0]
+    if 'steps' in data:
+        del data['steps']
+
+
+def compare_prob_vs_comp_check_partials(probdata, compdata, comp):
+    """
+    Compare the check_partials output for a Problem and a Component.
+
+    Parameters
+    ----------
+    probdata : dict
+        Problem check_partials data.
+    compdata : dict
+        Component check_partials data.
+    comp : Component
+        The component being checked.
+
+    Returns
+    -------
+    dict
+        Comparison data.
+    """
+    from openmdao.utils.assert_utils import assert_near_equal
+
+    try:
+        probcompdata = probdata[comp.pathname]
+    except KeyError:
+        raise KeyError(f"Component '{comp.pathname}' not found in Problem check_partials data.")
+
+    compdata = compdata[comp.pathname]
+
+    # check that the keys are the same
+    assert set(probcompdata.keys()) == set(compdata.keys()), \
+        f"Subjac keys don't match for {comp.pathname}"
+
+    # check that the values are the same
+    for key, probval in probcompdata.items():
+        compval = compdata[key]
+
+        if 'steps' not in probval:
+            # if there is only one FD step, 'steps' gets removed from problem data
+            compval = compval.copy()
+            _fix_comp_check_data(compval)
+
+        # check that the keys are the same
+        assert set(probval.keys()) == set(compval.keys()), \
+            f"For subjac key '{key}', inner dict keys don't match: {sorted(probval.keys())} " \
+            f"!= {sorted(compval.keys())}."
+
+        for key2 in probval:
+            probval2 = probval[key2]
+            compval2 = compval[key2]
+
+            if key2 in ('J_fd', 'J_fwd', 'denom_idx'):
+                assert_near_equal(probval2, compval2, 1e-6, 1e-6)
+            else:
+                for i in range(3):
+                    p = probval2[i]
+                    c = compval2[i]
+                    if p is None and c is None:
+                        continue
+                    assert_near_equal(p, c, 1e-6, 1e-6), \
+                        f"For key '{key}/{key2}', {probval2} != {compval2}."
 
 
 class _ModelViewerDataTreeEncoder(json.JSONEncoder):
